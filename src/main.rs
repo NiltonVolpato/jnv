@@ -71,6 +71,7 @@ pub struct Args {
     pub config_file: Option<PathBuf>,
 
     #[arg(
+        short = 'i',
         long = "default-filter",
         help = "Default jq filter to apply to the input data",
         long_help = "
@@ -81,7 +82,18 @@ pub struct Args {
     default_filter: Option<String>,
 
     #[arg(
+        short = 'f',
+        long = "write-filter-to-stderr",
+        num_args(0..=1), require_equals(true), default_missing_value("true"),
+        default_value("true"),
+        help = "Write the filter to stderr when exiting"
+    )]
+    write_filter_to_stderr: bool,
+
+    #[arg(
+        short = 'o',
         long = "write-to-stdout",
+        num_args(0..=1), require_equals(true), default_missing_value("true"),
         help = "Write the current JSON result to stdout when exiting"
     )]
     write_to_stdout: bool,
@@ -163,6 +175,7 @@ impl Drop for TerminalCleanupGuard {
     fn drop(&mut self) {
         let _ = crossterm::execute!(
             io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
             crossterm::cursor::Show,
             crossterm::event::DisableMouseCapture
         );
@@ -189,10 +202,17 @@ async fn main() -> anyhow::Result<()> {
         // so anything failing here is a real problem the user should hear about
         .map_err(|e| anyhow!("{e}"))?;
 
+    // Redirects stdout to prevent interference with TUI interface.
+    let mut stdout_redirect = StdoutRedirect::try_new_for_tui(args.write_to_stdout)?;
+
     // Set up terminal
     crossterm::terminal::enable_raw_mode()?;
     let _terminal_cleanup_guard = TerminalCleanupGuard;
-    crossterm::execute!(io::stdout(), crossterm::cursor::Hide)?;
+    crossterm::execute!(
+        io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::cursor::Hide,
+    )?;
 
     // Spawn the completion loader task, which will asynchronously load suggestions based on the input data.
     let (shared_suggestions, completion_loader_task) = completion::spawn_initialize(
@@ -227,9 +247,6 @@ async fn main() -> anyhow::Result<()> {
         // TODO: remove clones
         config.keybinds.on_editor.clone(),
     );
-
-    // Redirects stdout to prevent interference with TUI interface.
-    let mut stdout_redirect = StdoutRedirect::try_new_for_tui(args.write_to_stdout)?;
 
     // Get terminal size for rendering purposes.
     let terminal_size = crossterm::terminal::size()?;
@@ -375,16 +392,12 @@ async fn main() -> anyhow::Result<()> {
         guide_action_tx.clone(),
     );
 
-    let maybe_output_result: anyhow::Result<Option<String>> = match event_dispacher_task.await {
-        Ok(Ok(())) if args.write_to_stdout => {
-            let runtime = shared_json_viewer.lock().await;
-            Ok(Some(runtime.formatted_content()))
-        }
-        Ok(Ok(())) => Ok(None),
+    let exit_mode = match event_dispacher_task.await {
+        Ok(Ok(mode)) => mode,
         // `event_dispacher_task` itself joined successfully, but the task body returned an application error.
-        Ok(Err(err)) => Err(err),
+        Ok(Err(err)) => return Err(err),
         // The join operation failed (e.g. panic/cancel) before the task body could return its own result.
-        Err(err) => Err(err.into()),
+        Err(err) => return Err(err.into()),
     };
 
     spinner_task.abort();
@@ -410,17 +423,77 @@ async fn main() -> anyhow::Result<()> {
     let _ = completion_navigator_task.await;
     let _ = json_viewer_task.await;
 
-    // Restore terminal state and write output to stdout if the option is enabled.
+    // Restore terminal state (leaves alternate screen, restores cursor, disables mouse capture & raw mode)
+    // before restoring stdout redirect.
+    drop(_terminal_cleanup_guard);
     stdout_redirect.restore()?;
 
-    // If the user has enabled the option to write the current JSON result to stdout on exit, output it now.
-    if let Some(output) = maybe_output_result? {
-        let mut stdout = io::stdout();
-        stdout.write_all(output.as_bytes())?;
-        if !output.ends_with('\n') {
-            stdout.write_all(b"\n")?;
+    match exit_mode {
+        event_dispatcher::ExitMode::Normal => {
+            // If the user has enabled the option to write the current JSON result to stdout on exit, output it now.
+            if args.write_to_stdout {
+                let runtime = shared_json_viewer.lock().await;
+                let output = runtime.formatted_content();
+                let mut stdout = io::stdout();
+                stdout.write_all(output.as_bytes())?;
+                if !output.ends_with('\n') {
+                    stdout.write_all(b"\n")?;
+                }
+            }
+
+            // If the user has enabled the option to write the filter to stderr on exit, output it now.
+            if args.write_filter_to_stderr {
+                let filter = shared_query_editor.read().await.text();
+                let mut stderr = io::stderr();
+                stderr.write_all(filter.as_bytes())?;
+                if !filter.ends_with('\n') {
+                    stderr.write_all(b"\n")?;
+                }
+            }
+
+            Ok(())
+        }
+        event_dispatcher::ExitMode::Cancel => {
+            std::process::exit(1);
         }
     }
+}
 
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_args_defaults() {
+        let args = Args::parse_from(["jnv", "data.json"]);
+        assert!(args.write_filter_to_stderr);
+        assert!(!args.write_to_stdout);
+    }
+
+    #[test]
+    fn test_args_write_filter_to_stderr_flag() {
+        let args = Args::parse_from(["jnv", "data.json", "-f"]);
+        assert!(args.write_filter_to_stderr);
+
+        let args = Args::parse_from(["jnv", "data.json", "--write-filter-to-stderr"]);
+        assert!(args.write_filter_to_stderr);
+
+        let args = Args::parse_from(["jnv", "data.json", "-f=false"]);
+        assert!(!args.write_filter_to_stderr);
+
+        let args = Args::parse_from(["jnv", "data.json", "--write-filter-to-stderr=false"]);
+        assert!(!args.write_filter_to_stderr);
+    }
+
+    #[test]
+    fn test_args_write_to_stdout_flag() {
+        let args = Args::parse_from(["jnv", "data.json", "-o"]);
+        assert!(args.write_to_stdout);
+
+        let args = Args::parse_from(["jnv", "data.json", "--write-to-stdout"]);
+        assert!(args.write_to_stdout);
+
+        let args = Args::parse_from(["jnv", "data.json", "-o=false"]);
+        assert!(!args.write_to_stdout);
+    }
 }

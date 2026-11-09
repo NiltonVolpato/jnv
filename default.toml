@@ -118,8 +118,10 @@ inactive_item_style = "fg=grey"
 
 # Keybinding settings
 [keybinds]
-# Key to exit the application
-exit = ["Ctrl+C"]
+# Key to exit the application normally
+exit = ["Enter"]
+# Key to cancel and abort the application
+cancel = ["Ctrl+C"]
 # Key to copy the query to the clipboard
 copy_query = ["Ctrl+Q"]
 # Key to copy the result to the clipboard
@@ -171,7 +173,7 @@ move_to_head = ["Ctrl+L"]
 # Move to the bottom of JSON viewer
 move_to_tail = ["Ctrl+H"]
 # Toggle expand/collapse of JSON nodes
-toggle = ["Enter"]
+toggle = ["Space"]
 # Expand all JSON nodes
 expand = ["Ctrl+P"]
 # Collapse all JSON nodes

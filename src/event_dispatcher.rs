@@ -6,7 +6,7 @@ use promkit_widgets::{
         event::{
             DisableMouseCapture, EnableMouseCapture, Event, EventStream, MouseEvent, MouseEventKind,
         },
-        execute, terminal,
+        execute,
     },
     spinner::State,
 };
@@ -21,11 +21,18 @@ use crate::{
     query_editor::QueryEditorAction,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitMode {
+    Normal,
+    Cancel,
+}
+
 /// Actions that can be triggered by terminal events,
 /// which are dispatched to the appropriate components.
 enum Action {
     Resize(u16, u16),
     Exit,
+    Cancel,
     CopyQuery,
     CopyResult,
     /// Switch between query-editor/completion and JSON viewer.
@@ -42,7 +49,7 @@ pub fn spawn_terminal_event_dispatch_task(
     completion_action_tx: mpsc::Sender<CompletionAction>,
     json_viewer_action_tx: mpsc::Sender<json_viewer::ViewerAction>,
     guide_action_tx: mpsc::Sender<GuideAction>,
-) -> JoinHandle<anyhow::Result<()>> {
+) -> JoinHandle<anyhow::Result<ExitMode>> {
     let mut stream = EventStream::new();
     tokio::spawn(async move {
         'main: loop {
@@ -70,6 +77,8 @@ pub fn spawn_terminal_event_dispatch_task(
 
                     let action = if let Event::Resize(width, height) = event {
                         Some(Action::Resize(width, height))
+                    } else if keybinds.cancel.contains(&event) {
+                        Some(Action::Cancel)
                     } else if keybinds.exit.contains(&event) {
                         Some(Action::Exit)
                     } else if keybinds.copy_query.contains(&event) {
@@ -87,7 +96,8 @@ pub fn spawn_terminal_event_dispatch_task(
                             Action::Resize(width, height) => {
                                 debounce_resize_tx.send((width, height)).await?;
                             }
-                            Action::Exit => break 'main,
+                            Action::Exit => break 'main Ok(ExitMode::Normal),
+                            Action::Cancel => break 'main Ok(ExitMode::Cancel),
                             Action::CopyQuery => {
                                 editor_action_tx.send(QueryEditorAction::CopyQuery).await?;
                             }
@@ -110,11 +120,7 @@ pub fn spawn_terminal_event_dispatch_task(
                                         ctx.set_active_index(Index::JsonViewer).await;
                                         completion_action_tx.send(CompletionAction::Leave).await?;
                                         editor_action_tx.send(QueryEditorAction::Leave).await?;
-                                        execute!(
-                                            io::stdout(),
-                                            terminal::EnterAlternateScreen,
-                                            EnableMouseCapture,
-                                        )?;
+                                        execute!(io::stdout(), EnableMouseCapture)?;
                                     } else {
                                         guide_action_tx
                                             .send(GuideAction::Show(
@@ -126,11 +132,7 @@ pub fn spawn_terminal_event_dispatch_task(
                                 Index::JsonViewer => {
                                     ctx.set_active_index(Index::QueryEditor).await;
                                     editor_action_tx.send(QueryEditorAction::Enter).await?;
-                                    execute!(
-                                        io::stdout(),
-                                        terminal::LeaveAlternateScreen,
-                                        DisableMouseCapture,
-                                    )?;
+                                    execute!(io::stdout(), DisableMouseCapture)?;
                                 }
                                 Index::Guide => {}
                             },
@@ -158,10 +160,9 @@ pub fn spawn_terminal_event_dispatch_task(
                     }
                 },
                 else => {
-                    break 'main;
+                    break 'main Ok(ExitMode::Normal);
                 }
             }
         }
-        Ok(())
     })
 }

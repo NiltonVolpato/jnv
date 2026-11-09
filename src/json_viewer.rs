@@ -89,27 +89,26 @@ impl JsonViewer {
         area: (u16, u16),
         input: String,
     ) -> (Option<GuideMessage>, Option<StyledGraphemes>) {
+        if input.trim().is_empty() {
+            self.state.stream = JsonStream::new(self.json.iter());
+            return (None, Some(self.state.create_graphemes(area.0, area.1)));
+        }
+
         match json::run_jaq(&input, &self.json) {
             Ok(ret) => {
                 let mut guide = None;
                 if ret.iter().all(|val| *val == Value::Null) {
                     guide = Some(GuideMessage::JqReturnedNull(input));
-
-                    self.state.stream = JsonStream::new(self.json.iter());
                 } else {
                     self.state.stream = JsonStream::new(ret.iter());
                 }
 
                 (guide, Some(self.state.create_graphemes(area.0, area.1)))
             }
-            Err(e) => {
-                self.state.stream = JsonStream::new(self.json.iter());
-
-                (
-                    Some(GuideMessage::JqFailed(e.to_string())),
-                    Some(self.state.create_graphemes(area.0, area.1)),
-                )
-            }
+            Err(e) => (
+                Some(GuideMessage::JqFailed(e.to_string())),
+                Some(self.state.create_graphemes(area.0, area.1)),
+            ),
         }
     }
 }
@@ -388,4 +387,86 @@ pub fn start_viewer_task(
         }
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use promkit_widgets::serde_json::json;
+
+    #[tokio::test]
+    async fn test_preserves_stream_on_syntax_error_and_null() {
+        let values = vec![json!([
+            {"name": "alice", "age": 30},
+            {"name": "bob", "age": 25}
+        ])];
+        let config = Config::load_from(crate::config::DEFAULT_CONFIG).unwrap();
+        let stream = JsonStream::new(values.iter());
+        let mut viewer = JsonViewer {
+            state: jsonstream::State {
+                stream,
+                config: config.json.stream,
+            },
+            json: values,
+            keybinds: config.keybinds.on_json_viewer,
+        };
+
+        // Initially contains both alice and bob
+        let initial_content = viewer.formatted_content();
+        assert!(initial_content.contains("alice"));
+        assert!(initial_content.contains("bob"));
+
+        // Run valid query: .[0]
+        let (guide, graphemes) = viewer
+            .refresh_view_with_query((80, 24), ".[0]".to_string())
+            .await;
+        assert!(guide.is_none(), "expected no guide message, got {:?}", guide);
+        assert!(graphemes.is_some());
+        let filtered_content = viewer.formatted_content();
+        assert!(filtered_content.contains("alice"));
+        assert!(!filtered_content.contains("bob"));
+
+        // Run invalid syntax query: .[
+        let (guide, graphemes) = viewer
+            .refresh_view_with_query((80, 24), ".[".to_string())
+            .await;
+        assert!(matches!(guide, Some(GuideMessage::JqFailed(_))));
+        assert!(graphemes.is_some());
+        // Verify formatted content is STILL the result of .[0] (not reset to root document)
+        let retained_content = viewer.formatted_content();
+        assert!(retained_content.contains("alice"));
+        assert!(!retained_content.contains("bob"));
+
+        // Run null-evaluating query: .[99]
+        let (guide, graphemes) = viewer
+            .refresh_view_with_query((80, 24), ".[99]".to_string())
+            .await;
+        assert!(matches!(guide, Some(GuideMessage::JqReturnedNull(_))));
+        assert!(graphemes.is_some());
+        // Verify formatted content is STILL the result of .[0]
+        let retained_after_null = viewer.formatted_content();
+        assert!(retained_after_null.contains("alice"));
+        assert!(!retained_after_null.contains("bob"));
+
+        // Clearing query resets to the root document
+        let (guide, graphemes) = viewer
+            .refresh_view_with_query((80, 24), "".to_string())
+            .await;
+        assert!(guide.is_none());
+        assert!(graphemes.is_some());
+        let reset_content = viewer.formatted_content();
+        assert!(reset_content.contains("alice"));
+        assert!(reset_content.contains("bob"));
+
+        // Whitespace query also resets to root document
+        viewer
+            .refresh_view_with_query((80, 24), ".[0]".to_string())
+            .await;
+        assert!(!viewer.formatted_content().contains("bob"));
+        viewer
+            .refresh_view_with_query((80, 24), "   ".to_string())
+            .await;
+        assert!(viewer.formatted_content().contains("bob"));
+    }
 }

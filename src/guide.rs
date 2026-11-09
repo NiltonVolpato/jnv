@@ -9,6 +9,7 @@ use crate::context::{Index, SharedContext};
 
 /// Represent a message to be shown in the guide.
 /// This is used to decouple the logic of generating messages from the logic of rendering them.
+#[derive(Debug)]
 pub enum GuideMessage {
     CopiedToClipboard,
     FailedToCopyToClipboard(String),

@@ -32,6 +32,8 @@ pub struct CompletionConfig {
 pub struct Keybinds {
     #[serde(with = "event_set_serde")]
     pub exit: HashSet<Event>,
+    #[serde(default, with = "event_set_serde")]
+    pub cancel: HashSet<Event>,
     #[serde(with = "event_set_serde")]
     pub copy_query: HashSet<Event>,
     #[serde(with = "event_set_serde")]
@@ -138,5 +140,89 @@ pub struct Config {
 impl Config {
     pub fn load_from(content: &str) -> anyhow::Result<Self> {
         toml::from_str(content).map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use promkit_widgets::core::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn test_default_config_keybinds() {
+        let config = Config::load_from(DEFAULT_CONFIG).expect("Failed to parse DEFAULT_CONFIG");
+
+        let enter_event = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            config.keybinds.exit.contains(&enter_event),
+            "exit keybind should contain Enter"
+        );
+
+        let ctrl_c_event = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(
+            config.keybinds.cancel.contains(&ctrl_c_event),
+            "cancel keybind should contain Ctrl+C"
+        );
+
+        let space_event = Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(
+            config.keybinds.on_json_viewer.toggle.contains(&space_event),
+            "toggle keybind should contain Space"
+        );
+    }
+
+    #[test]
+    fn test_missing_cancel_in_config_defaults_to_empty() {
+        let legacy_config = r#"
+no_hint = false
+
+[reactivity_control]
+query_debounce_duration = "200ms"
+resize_debounce_duration = "100ms"
+spin_duration = "10ms"
+
+[editor.on_focus]
+[editor.on_defocus]
+
+[json]
+[json.stream]
+
+[completion]
+search_result_chunk_size = 10
+search_load_chunk_size = 10
+[completion.listbox]
+
+[keybinds]
+exit = ["Ctrl+C"]
+copy_query = ["Ctrl+Q"]
+copy_result = ["Ctrl+O"]
+switch_mode = ["Shift+Down", "Shift+Up"]
+
+[keybinds.on_editor]
+backward = ["Left"]
+forward = ["Right"]
+move_to_head = ["Ctrl+A"]
+move_to_tail = ["Ctrl+E"]
+move_to_previous_nearest = ["Alt+B"]
+move_to_next_nearest = ["Alt+F"]
+erase = ["Backspace"]
+erase_all = ["Ctrl+U"]
+erase_to_previous_nearest = ["Ctrl+W"]
+erase_to_next_nearest = ["Alt+D"]
+completion = ["Tab"]
+on_completion.up = ["Up"]
+on_completion.down = ["Down"]
+
+[keybinds.on_json_viewer]
+up = ["Up"]
+down = ["Down"]
+move_to_head = ["Ctrl+L"]
+move_to_tail = ["Ctrl+H"]
+toggle = ["Enter"]
+expand = []
+collapse = []
+"#;
+        let config = Config::load_from(legacy_config).expect("Failed to parse config without cancel key");
+        assert!(config.keybinds.cancel.is_empty());
     }
 }

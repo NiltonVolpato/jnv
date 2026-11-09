@@ -128,7 +128,8 @@ cat data.json | jnv --write-to-stdout > result.json
 
 | Key | Action |
 | :- | :- |
-| <kbd>Ctrl + C</kbd> | Exit |
+| <kbd>Enter</kbd> | Exit normally (outputs result) |
+| <kbd>Ctrl + C</kbd> | Cancel / abort (no output, non-zero exit) |
 | <kbd>Ctrl + Q</kbd> | Copy jq filter to clipboard |
 | <kbd>Ctrl + O</kbd> | Copy JSON to clipboard |
 | <kbd>Shift + ↑</kbd>, <kbd>Shift + ↓</kbd> | Switch to another mode |
@@ -165,7 +166,7 @@ cat data.json | jnv --write-to-stdout > result.json
 | <kbd>↓</kbd>, <kbd>Ctrl + J</kbd> | Move down |
 | <kbd>Ctrl + H</kbd> | Move to last entry |
 | <kbd>Ctrl + L</kbd> | Move to first entry |
-| <kbd>Enter</kbd> | Toggle fold |
+| <kbd>Space</kbd> | Toggle fold |
 | <kbd>Ctrl + P</kbd> | Expand all |
 | <kbd>Ctrl + N</kbd> | Collapse all |
 
@@ -187,11 +188,18 @@ Arguments:
   [INPUT]  Optional path to a JSON file. If not provided or if "-" is specified, reads from standard input
 
 Options:
-  -c, --config <CONFIG_FILE>             Path to the configuration file.
-      --default-filter <DEFAULT_FILTER>  Default jq filter to apply to the input data
-      --write-to-stdout                  Write the current JSON result to stdout when exiting
-  -h, --help                             Print help (see more with '--help')
-  -V, --version                          Print version
+  -c, --config <CONFIG_FILE>
+          Path to the configuration file.
+  -i, --default-filter <DEFAULT_FILTER>
+          Default jq filter to apply to the input data
+  -f, --write-filter-to-stderr[=<WRITE_FILTER_TO_STDERR>]
+          Write the filter to stderr when exiting [default: true] [possible values: true, false]
+  -o, --write-to-stdout[=<WRITE_TO_STDOUT>]
+          Write the current JSON result to stdout when exiting [default: false] [possible values: true, false]
+  -h, --help
+          Print help (see more with '--help')
+  -V, --version
+          Print version
 ```
 
 ## Configuration
